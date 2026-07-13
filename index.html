@@ -1,0 +1,504 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Flicker Display</title>
+
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/babel.min.js"></script>
+
+<style>
+  :root {
+    color-scheme: light;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #root {
+    height: 100%;
+  }
+
+  .app {
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+  }
+
+  /* ---- Upper region: display area (70%) ---- */
+  .display {
+    flex: 0 0 70%;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .patch {
+    position: absolute;
+    border-radius: 50%;
+    /* background-color is written imperatively each frame: rgba(0, 0, 0, opacity) */
+    background-color: rgba(0, 0, 0, 0);
+    will-change: background-color;
+  }
+  .marker {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #000000;
+    opacity: 1;
+    z-index: 1; /* always above the patch */
+  }
+
+  /* ---- Lower region: frequency selector (30%) ---- */
+  .controls {
+    flex: 0 0 30%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 12px 16px;
+  }
+  .freq-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+  }
+  .freq-btn {
+    min-width: 76px;
+    min-height: 44px;
+    padding: 0 16px;
+    border: 2px solid #000000;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #000000;
+    font-family: inherit;
+    font-size: 16px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+  .freq-btn.active {
+    background: #000000;
+    color: #ffffff;
+  }
+  .freq-btn:focus-visible {
+    outline: 3px solid #0066ff;
+    outline-offset: 2px;
+  }
+
+  .status {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    font-size: 12px;
+    color: #666666;
+    font-variant-numeric: tabular-nums;
+  }
+  .status .pending {
+    color: #000000;
+  }
+  .unreliable {
+    max-width: 44em;
+    text-align: center;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #b00020;
+  }
+
+  /* ---- Safety warning ---- */
+  .warning {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .warning-box {
+    max-width: 460px;
+    text-align: center;
+  }
+  .warning-box h1 {
+    margin: 0 0 16px;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .warning-box p {
+    margin: 0 0 28px;
+    font-size: 16px;
+    line-height: 1.5;
+    color: #222222;
+  }
+  .warning-box button {
+    min-height: 44px;
+    padding: 0 32px;
+    border: 2px solid #000000;
+    border-radius: 6px;
+    background: #000000;
+    color: #ffffff;
+    font-family: inherit;
+    font-size: 16px;
+    cursor: pointer;
+  }
+</style>
+
+<div id="root"></div>
+
+<!--
+  A white screen is indistinguishable from an off period, so surface boot
+  failures instead of failing silently: report script errors, and complain if
+  the app has not mounted shortly after load.
+-->
+<script>
+  function reportBootFailure(message) {
+    const box = document.createElement("pre");
+    box.style.cssText =
+      "position:fixed;inset:0;z-index:99;margin:0;padding:24px;background:#fff;color:#b00020;" +
+      "font:13px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;overflow:auto";
+    box.textContent = "The flicker display failed to start.\n\n" + message;
+    document.body.appendChild(box);
+  }
+
+  window.addEventListener("error", (event) => {
+    reportBootFailure(
+      (event.message || "Script error") +
+        (event.filename ? "\n  at " + event.filename + ":" + event.lineno + ":" + event.colno : "")
+    );
+  });
+
+  window.addEventListener("load", () => {
+    setTimeout(() => {
+      if (!document.querySelector(".app")) {
+        reportBootFailure(
+          "The React app never mounted, and no script error was reported.\n\n" +
+            "React loaded:     " + (typeof React !== "undefined") + "\n" +
+            "ReactDOM loaded:  " + (typeof ReactDOM !== "undefined") + "\n" +
+            "Babel loaded:     " + (typeof Babel !== "undefined") + "\n" +
+            "FlickerCore:      " + (typeof globalThis.FlickerCore !== "undefined") + "\n" +
+            "createRoot:       " + typeof (window.ReactDOM || {}).createRoot + "\n" +
+            "Babel ran the JSX block: " + (globalThis.__jsxBlockRan === true)
+        );
+      }
+    }, 3000);
+  });
+</script>
+
+<!--
+  Timing core. Plain JS, no React, no JSX, no DOM: everything here is a pure
+  function or a self-contained state machine driven by timestamps you hand it.
+  That keeps it runnable outside a browser — see test/timing.test.js, which
+  loads this exact block and drives it with synthetic frame timestamps.
+-->
+<script id="flicker-core">
+  // framesPerCycle values. Even integers only: an even N samples the sinusoid
+  // symmetrically (every sample at phase φ is matched by one at φ + π), so the
+  // opacity distribution stays balanced around 0.5.
+  const DIVISORS = [4, 6, 8, 10, 12];
+  const DEFAULT_DIVISOR = 6; // 10 Hz at 60 Hz refresh
+  const STANDARD_REFRESH_RATES = [60, 72, 90, 120, 144, 240];
+  const FALLBACK_REFRESH_RATE = 60;
+
+  const ON_MS = 5000;
+  const OFF_MS = 5000;
+
+  const DETECTION_FRAMES = 60;
+
+  function formatHz(hz) {
+    return Number.isInteger(hz) ? String(hz) : hz.toFixed(1);
+  }
+
+  // Frame-locked, never wall-clock: phase comes from the count of rendered
+  // frames, so the sinusoid stays locked to the display's own refresh cycle.
+  function computeOpacity(frameCount, framesPerCycle) {
+    const phase = ((frameCount % framesPerCycle) / framesPerCycle) * 2 * Math.PI;
+    return (1 + Math.sin(phase)) / 2;
+  }
+
+  // How far the measurement may sit from a standard rate before we stop trusting it.
+  const REFRESH_TOLERANCE = 0.05; // 5%
+
+  // Median inter-frame interval (robust to the odd dropped frame), snapped to the
+  // nearest standard refresh rate.
+  //
+  // Snapping alone is dangerous: a phone in Low Power Mode throttles rAF to ~30 Hz,
+  // which has no standard rate near it and would snap to 60 — and the flicker would
+  // then run at half its stated frequency, silently. So report the raw measurement
+  // alongside the snapped rate, and flag when the two disagree too much to trust.
+  function refreshEstimateFromIntervals(intervals) {
+    const unknown = { rate: FALLBACK_REFRESH_RATE, measured: null, reliable: false };
+    if (!intervals.length) return unknown;
+
+    const sorted = intervals.slice().sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    if (!Number.isFinite(median) || median <= 0) return unknown;
+
+    const measured = 1000 / median;
+    const rate = STANDARD_REFRESH_RATES.reduce((best, candidate) =>
+      Math.abs(candidate - measured) < Math.abs(best - measured) ? candidate : best
+    );
+    const reliable = Math.abs(measured - rate) / rate <= REFRESH_TOLERANCE;
+    return { rate, measured, reliable };
+  }
+
+  // The on/off state machine. Call tick() once per rendered frame with the rAF
+  // timestamp; it returns the opacity for that frame.
+  //
+  // Timestamps decide only the 5s-on / 5s-off boundaries. Within an on period
+  // the opacity is driven purely by the frame counter, which resets to 0 at the
+  // start of every on period so the sinusoid always begins from the same phase.
+  function createFlickerEngine({ getSelectedDivisor, onPhaseChange, onActiveDivisorChange }) {
+    let periodStart = null;
+    let on = true;
+    let frameCount = 0;
+    let activeDivisor = getSelectedDivisor();
+
+    // A frequency change is deferred to the start of the next off period, so the
+    // user never sees the sinusoid jump mid-flicker.
+    const applyPending = () => {
+      const selected = getSelectedDivisor();
+      if (selected !== activeDivisor) {
+        activeDivisor = selected;
+        onActiveDivisorChange(activeDivisor);
+      }
+    };
+
+    return {
+      isOn: () => on,
+      getActiveDivisor: () => activeDivisor,
+
+      tick(timestamp) {
+        if (periodStart === null) periodStart = timestamp;
+        const elapsed = timestamp - periodStart;
+
+        if (on && elapsed >= ON_MS) {
+          on = false;
+          periodStart = timestamp;
+          onPhaseChange(false);
+        } else if (!on && elapsed >= OFF_MS) {
+          on = true;
+          periodStart = timestamp;
+          frameCount = 0; // every on period starts from the same phase
+          applyPending(); // catches a change made on the final frame of the off period
+          onPhaseChange(true);
+        }
+
+        // Pending changes land throughout the off period, which covers both the
+        // deferred case (selected mid-flicker) and a selection made while already
+        // off, where the spec wants it applied immediately.
+        if (!on) {
+          applyPending();
+          return 0;
+        }
+
+        const opacity = computeOpacity(frameCount, activeDivisor);
+        frameCount += 1;
+        return opacity;
+      },
+    };
+  }
+
+  // The React block below reaches these declarations directly through the global
+  // lexical scope. This export exists for the tests, which evaluate this block on
+  // its own, outside a browser.
+  globalThis.FlickerCore = {
+    DIVISORS,
+    DEFAULT_DIVISOR,
+    STANDARD_REFRESH_RATES,
+    FALLBACK_REFRESH_RATE,
+    ON_MS,
+    OFF_MS,
+    DETECTION_FRAMES,
+    REFRESH_TOLERANCE,
+    formatHz,
+    computeOpacity,
+    refreshEstimateFromIntervals,
+    createFlickerEngine,
+  };
+</script>
+
+<script type="text/babel" data-presets="react">
+  globalThis.__jsxBlockRan = true; // read by the boot-failure reporter above
+
+  // DIVISORS, formatHz, createFlickerEngine and friends come from the flicker-core
+  // script above and are used unqualified here.
+  //
+  // Do NOT re-declare them (e.g. `const { DIVISORS } = globalThis.FlickerCore`).
+  // Top-level `const` in a classic script lives in the shared global lexical scope,
+  // and Babel appends this transformed block as another classic script — so a
+  // re-declaration is a SyntaxError, Babel's appendChild throws, this block never
+  // runs, and the page renders blank. test/boot.test.js guards against exactly that.
+  const { useState, useRef, useEffect, useCallback } = React;
+
+  // Measure inter-frame intervals across ~60 rAF callbacks to estimate the display's
+  // refresh rate. Returns null until the estimate is ready, then { rate, measured,
+  // reliable }.
+  function useRefreshEstimate() {
+    const [estimate, setEstimate] = useState(null);
+
+    useEffect(() => {
+      const intervals = [];
+      let previous = null;
+      let raf = null;
+      let cancelled = false;
+
+      const sample = (timestamp) => {
+        if (cancelled) return;
+        if (previous !== null) intervals.push(timestamp - previous);
+        previous = timestamp;
+
+        if (intervals.length < DETECTION_FRAMES) {
+          raf = requestAnimationFrame(sample);
+          return;
+        }
+        setEstimate(refreshEstimateFromIntervals(intervals));
+      };
+
+      raf = requestAnimationFrame(sample);
+      return () => {
+        cancelled = true;
+        if (raf !== null) cancelAnimationFrame(raf);
+      };
+    }, []);
+
+    return estimate;
+  }
+
+  function App() {
+    const estimate = useRefreshEstimate();
+    const [dismissed, setDismissed] = useState(false);
+
+    const refreshRate = estimate ? estimate.rate : FALLBACK_REFRESH_RATE;
+    const ready = estimate !== null && dismissed;
+
+    // The divisor the user has selected. Drives the button highlight, so the tap
+    // is acknowledged immediately even though the flicker only switches later.
+    const [selectedDivisor, setSelectedDivisor] = useState(DEFAULT_DIVISOR);
+    // The divisor the rAF loop is actually running at. Lags `selectedDivisor`
+    // until the next off period.
+    const [activeDivisor, setActiveDivisor] = useState(DEFAULT_DIVISOR);
+    const [isOn, setIsOn] = useState(false);
+
+    const patchRef = useRef(null);
+    // Shadows selectedDivisor so the engine can read the latest selection without
+    // the frame loop being torn down and restarted on every change.
+    const selectedRef = useRef(DEFAULT_DIVISOR);
+
+    const selectDivisor = useCallback((divisor) => {
+      selectedRef.current = divisor;
+      setSelectedDivisor(divisor);
+    }, []);
+
+    useEffect(() => {
+      if (!ready) return;
+
+      const patch = patchRef.current;
+      let raf = null;
+
+      const engine = createFlickerEngine({
+        getSelectedDivisor: () => selectedRef.current,
+        onPhaseChange: setIsOn,
+        onActiveDivisorChange: setActiveDivisor,
+      });
+
+      setIsOn(engine.isOn());
+      setActiveDivisor(engine.getActiveDivisor());
+
+      const tick = (timestamp) => {
+        raf = requestAnimationFrame(tick);
+        // The opacity write goes straight to the DOM node: routing it through
+        // React state would put a full render on the per-frame critical path.
+        patch.style.backgroundColor = `rgba(0, 0, 0, ${engine.tick(timestamp)})`;
+      };
+
+      raf = requestAnimationFrame(tick);
+      return () => {
+        cancelAnimationFrame(raf);
+        if (patch) patch.style.backgroundColor = "rgba(0, 0, 0, 0)";
+      };
+    }, [ready]);
+
+    const frequencyOf = (divisor) => refreshRate / divisor;
+    const pendingSwitch = selectedDivisor !== activeDivisor;
+
+    return (
+      <div className="app">
+        <div className="display">
+          <div ref={patchRef} className="patch" style={{ width: "40vw", height: "40vw", minWidth: 200, minHeight: 200, maxWidth: 500, maxHeight: 500 }} />
+          <div className="marker" />
+        </div>
+
+        <div className="controls">
+          <div className="freq-row" role="radiogroup" aria-label="Flicker frequency">
+            {DIVISORS.map((divisor) => {
+              const active = divisor === selectedDivisor;
+              return (
+                <button
+                  key={divisor}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  className={active ? "freq-btn active" : "freq-btn"}
+                  onClick={() => selectDivisor(divisor)}
+                >
+                  {formatHz(frequencyOf(divisor))} Hz
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="status">
+            <span>{refreshRate} Hz display{estimate === null ? " (detecting…)" : ""}</span>
+            <span>{isOn ? "flickering" : "off period"}</span>
+            {pendingSwitch && (
+              <span className="pending">
+                {formatHz(frequencyOf(selectedDivisor))} Hz queued for next off period
+              </span>
+            )}
+          </div>
+
+          {estimate !== null && !estimate.reliable && (
+            // Never let a bad refresh estimate pass quietly: every frequency label on
+            // screen is derived from it, so if it is wrong they are all wrong.
+            <div className="unreliable" role="alert">
+              Measured {estimate.measured.toFixed(1)} Hz, which is not a standard refresh rate.
+              Frame timing is unreliable and the frequencies above may be wrong — on a phone,
+              check Low Power Mode is off.
+            </div>
+          )}
+        </div>
+
+        {!dismissed && (
+          <div className="warning">
+            <div className="warning-box">
+              <h1>Photosensitivity warning</h1>
+              <p>
+                This application displays flickering visual content at frequencies between 5–15 Hz.
+                If you are sensitive to flashing lights, do not proceed.
+              </p>
+              <button type="button" onClick={() => setDismissed(true)} autoFocus>
+                Continue
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
