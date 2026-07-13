@@ -33,24 +33,28 @@ opacity = (1 + sin(phase)) / 2
 
 **Frequency switching.** Tapping a button highlights it immediately but does not interrupt the flicker. The new frequency is applied at the start of the next off period, and takes effect when the following on period begins. The status line shows the queued change while it is pending. Switching during an off period applies right away.
 
-## Hosting it (phones, sharing)
+## Live at https://geoffles.com
+
+Hosted on GitHub Pages from the `/docs` folder of `main`, at the apex domain. To deploy a change:
 
 ```sh
 cd ~/Documents/flicker-display
-osascript -l JavaScript build.js
+osascript -l JavaScript build.js          # regenerate docs/
+osascript -l JavaScript test/boot.test.js # includes a staleness check on docs/
+git add -A && git commit -m "…" && git push
 ```
 
-That writes **`docs/index.html`** — one self-contained ~155 KB file with React inlined, the JSX pre-compiled, and no external references of any kind. Upload just that file to any static host and it works. Rename it `index.html` at the destination and it will be served as the page root.
+Pages rebuilds within a minute or so of the push.
 
-Why a build at all: `index.html` compiles its own JSX in the browser via Babel, which is what makes it a no-build-step file you can just double-click. But Babel is 2.8 MB — a lot to push to a phone on mobile data, and useless once the code has stopped changing. The build strips it. `index.html` remains the source of truth; **never edit `docs/index.html`**, it is overwritten on every build.
+`build.js` writes **`docs/index.html`** — one self-contained ~155 KB file with React inlined, the JSX pre-compiled, and no external references of any kind — plus **`docs/CNAME`**, which is what tells Pages to serve at `geoffles.com`. Both are regenerated every build, so a rebuild can never silently drop the domain.
 
-Somewhere to put it, roughly in order of effort:
+Why a build at all: `index.html` compiles its own JSX in the browser via Babel, which is what makes it a no-build-step file you can just double-click. But Babel is 2.8 MB — a lot to push to a phone on mobile data, and useless once the code has stopped changing. The build strips it. **`index.html` is the source of truth; never edit `docs/index.html`,** it is overwritten on every build.
 
-- **Netlify Drop** (`netlify.com/drop`) — drag the `docs` folder onto the page, get a public URL in seconds. No account, no CLI. Re-drag to update.
-- **GitHub Pages** — commit `docs/index.html` (Pages publishes from the `/docs` folder on `main`), get a permanent URL you control. Best if you want a stable link to send to participants.
-- **University web space** — copy the single file up by SFTP.
+### DNS
 
-Any of these serve over HTTPS, which is worth having: it keeps mobile browsers from meddling and is required if you ever add anything that needs a secure context.
+The apex `geoffles.com` resolves via four `A` records to GitHub's Pages IPs (`185.199.108–111.153`). DNS is managed by Squarespace, whose nameservers are `*.googledomains.com`. HTTPS is enforced and the certificate is issued by GitHub.
+
+`www.geoffles.com` is **not** configured. To add it, create a `CNAME` record in Squarespace with Name `www` pointing to `benjaminGriffiths.github.io`.
 
 ### Before you rely on it on a phone
 
