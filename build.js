@@ -76,6 +76,11 @@ if (problems.length) throw new Error("build produced a broken file:\n  " + probl
 fileManager.createDirectoryAtPathWithIntermediateDirectoriesAttributesError(ROOT + "/docs", true, $.null, null);
 write(ROOT + "/docs/index.html", out);
 
+// GitHub Pages reads the custom domain from this file, and serves the site at the
+// default *.github.io URL without it. Written on every build so a rebuild can never
+// silently drop it and take the domain down.
+write(ROOT + "/docs/CNAME", "geoffles.com\n");
+
 const sourceKb = Math.round((source.length + 2949000) / 1024); // source + the vendor/ it loads
 const distKb = Math.round(out.length / 1024);
 "built docs/index.html — " + distKb + " KB, self-contained (was ~" + sourceKb + " KB with Babel)";
